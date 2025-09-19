@@ -20,6 +20,7 @@ const Goal = require("../models/Goal");
 const Nutrition = require("../models/Nutrition");
 const Notifications = require("../models/Notifications");
 const Food = require("../models/foods");
+const qs = require("qs");
 
 // All admin routes require admin
 router.use(requireAuth, requireRole("admin"));
@@ -96,8 +97,7 @@ const generateTokenWithoutExpiry = (user) => {
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadPath = path.join(__dirname, "../files/news");
-    // Ensure directory exists
-    fs.mkdirSync(uploadPath, { recursive: true });
+    fs.mkdirSync(uploadPath, { recursive: true }); // ensure folder exists
     cb(null, uploadPath);
   },
   filename: (req, file, cb) => {
@@ -580,66 +580,89 @@ router.get("/newsletters/get/:id", async (req, res) => {
 });
 
 // Newsletter upload
-router.post("/newsletters", uploadNews.single("picture"), async (req, res) => {
-  try {
-    const { title, description, status, scheduledAt, id, audience } = req.body;
-    if (!title || !description)
-      return res.status(400).json({ error: "Missing title/description" });
+router.post(
+  "/newsletters",
+  uploadNews.any(), // accept any fields
+  async (req, res) => {
+    try {
+      const parsedBody = qs.parse(req.body);
 
-    // Build relative URL
-    const picture = req.file ? `/news/${req.file.filename}` : null;
-    if (id) {
-      if (!picture) {
-        const doc = await Newsletter.findByIdAndUpdate(
-          id,
-          {
-            title,
-            description,
-            status: status || "draft",
-            scheduledAt,
-            exclude: audience,
-          },
-          { new: true }
-        );
-        if (!doc) return res.status(404).json({ error: "Not found" });
-        return res
-          .status(201)
-          .json({ message: "Newsletter updated", newsletter: doc });
-      } else {
-        const doc = await Newsletter.findByIdAndUpdate(
-          id,
-          {
-            title,
-            description,
-            picture: picture || undefined,
-            status: status || "draft",
-            scheduledAt,
-            exclude: audience,
-          },
-          { new: true }
-        );
+      const { title, description, status, scheduledAt, id, audience } =
+        parsedBody;
+
+      if (!title || !description) {
+        return res.status(400).json({ error: "Missing title/description" });
+      }
+
+      const picture = req.files.find((f) => f.fieldname === "picture")
+        ? `/news/${req.files.find((f) => f.fieldname === "picture").filename}`
+        : null;
+
+      const pdf = req.files.find((f) => f.fieldname === "newsletterPdf")
+        ? `/news/${
+            req.files.find((f) => f.fieldname === "newsletterPdf").filename
+          }`
+        : null;
+
+      let deepDives = parsedBody.deepDives || [];
+
+      req.files.forEach((file) => {
+        const match = file.fieldname.match(/^deepDives\[(\d+)\]\[(\w+)\]$/);
+        if (match) {
+          const [_, index, field] = match;
+          if (!deepDives[index]) deepDives[index] = {};
+          deepDives[index][field] = `/news/${file.filename}`;
+        }
+      });
+
+      const allValid = deepDives.every(
+        (dd) => dd.title && dd.description && dd.picture && dd.pdf
+      );
+      if (!allValid) {
+        return res.status(400).json({
+          error: "Each deep dive must include title, description, picture, and pdf.",
+        });
+      }
+
+      if (id) {
+        const updateData = {
+          title,
+          description,
+          status: status || "draft",
+          scheduledAt,
+          exclude: audience,
+          ...(picture && { picture }),
+          ...(pdf && { pdf }),
+          deepDives,
+        };
+        const doc = await Newsletter.findByIdAndUpdate(id, updateData, {
+          new: true,
+        });
         if (!doc) return res.status(404).json({ error: "Not found" });
         return res
           .status(201)
           .json({ message: "Newsletter updated", newsletter: doc });
       }
+
+      const doc = await Newsletter.create({
+        title,
+        description,
+        picture,
+        pdf,
+        deepDives,
+        status: status || "draft",
+        scheduledAt,
+        author: req.user._id,
+      });
+
+      res.status(201).json({ message: "Newsletter created", newsletter: doc });
+    } catch (err) {
+      console.error("Error creating newsletter:", err);
+      res.status(500).json({ error: "Internal server error" });
     }
-
-    const doc = await Newsletter.create({
-      title,
-      description,
-      picture,
-      status: status || "draft",
-      scheduledAt,
-      author: req.user._id,
-    });
-
-    res.status(201).json({ message: "Newsletter created", newsletter: doc });
-  } catch (err) {
-    console.error("Error creating newsletter:", err);
-    res.status(500).json({ error: "Internal server error" });
   }
-});
+);
+
 
 router.patch("/newsletters/:id", async (req, res) => {
   const doc = await Newsletter.findByIdAndUpdate(req.params.id, req.body, {
