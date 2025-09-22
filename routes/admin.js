@@ -527,49 +527,53 @@ router.get("/newsletters", async (_req, res) => {
 });
 
 router.get("/newsletters/analytics", async (_req, res) => {
-  // Total newsletters
-  const totalNewsletters = await Newsletter.countDocuments();
+  try {
+    // Total newsletters
+    const totalNewsletters = await Newsletter.countDocuments();
 
-  // Last month calculation
-  const lastMonth = new Date();
-  lastMonth.setDate(lastMonth.getDate() - 30);
+    // Last month calculation
+    const lastMonth = new Date();
+    lastMonth.setDate(lastMonth.getDate() - 30);
 
-  const lastMonthCount = await Newsletter.countDocuments({
-    createdAt: { $gte: lastMonth },
-  });
+    const lastMonthCount = await Newsletter.countDocuments({
+      createdAt: { $gte: lastMonth },
+    });
 
-  const lastMonthRate =
-    totalNewsletters > 0
-      ? ((lastMonthCount / totalNewsletters) * 100).toFixed(2)
-      : 0;
+    const lastMonthRate =
+      totalNewsletters > 0
+        ? ((lastMonthCount / totalNewsletters) * 100).toFixed(2)
+        : 0;
 
-  // Today's newsletters
-  const startOfDay = new Date();
-  startOfDay.setHours(0, 0, 0, 0);
+    // Today's newsletters
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
 
-  const todayCount = await Newsletter.countDocuments({
-    createdAt: { $gte: startOfDay },
-  });
+    const todayCount = await Newsletter.countDocuments({
+      createdAt: { $gte: startOfDay },
+    });
 
-  // Average per day in last month
-  const avgPerDay = (lastMonthCount / 30).toFixed(2);
+    // Average per day in last month
+    const avgPerDay = (lastMonthCount / 30).toFixed(2);
 
-  return res.json({
-    stats: {
-      totalNewsletters,
-      lastMonth: {
-        created: lastMonthCount,
-        rate: `${lastMonthRate}%`,
+    return res.json({
+      stats: {
+        totalNewsletters,
+        lastMonth: {
+          created: lastMonthCount,
+          rate: `${lastMonthRate}%`,
+        },
+        today: {
+          created: todayCount,
+        },
+        average: {
+          perDay: avgPerDay,
+        },
       },
-      today: {
-        created: todayCount,
-      },
-      average: {
-        perDay: avgPerDay,
-      },
-    },
-  });
-  res.json(list);
+    });
+  } catch (err) {
+    console.error("Error fetching analytics:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 router.get("/newsletters/get/:id", async (req, res) => {
@@ -580,89 +584,71 @@ router.get("/newsletters/get/:id", async (req, res) => {
 });
 
 // Newsletter upload
-router.post(
-  "/newsletters",
-  uploadNews.any(), // accept any fields
-  async (req, res) => {
-    try {
-      const parsedBody = qs.parse(req.body);
+router.post("/newsletters", async (req, res) => {
+  try {
+    const parsedBody = qs.parse(req.body);
 
-      const { title, description, status, scheduledAt, id, audience } =
-        parsedBody;
+    const {
+      title,
+      description,
+      status,
+      scheduledAt,
+      id,
+      audience,
+      picture,
+      pdf,
+      deepDives = [],
+    } = parsedBody;
 
-      if (!title || !description) {
-        return res.status(400).json({ error: "Missing title/description" });
-      }
-
-      const picture = req.files.find((f) => f.fieldname === "picture")
-        ? `/news/${req.files.find((f) => f.fieldname === "picture").filename}`
-        : null;
-
-      const pdf = req.files.find((f) => f.fieldname === "newsletterPdf")
-        ? `/news/${
-            req.files.find((f) => f.fieldname === "newsletterPdf").filename
-          }`
-        : null;
-
-      let deepDives = parsedBody.deepDives || [];
-
-      req.files.forEach((file) => {
-        const match = file.fieldname.match(/^deepDives\[(\d+)\]\[(\w+)\]$/);
-        if (match) {
-          const [_, index, field] = match;
-          if (!deepDives[index]) deepDives[index] = {};
-          deepDives[index][field] = `/news/${file.filename}`;
-        }
-      });
-
-      const allValid = deepDives.every(
-        (dd) => dd.title && dd.description && dd.picture && dd.pdf
-      );
-      if (!allValid) {
-        return res.status(400).json({
-          error: "Each deep dive must include title, description, picture, and pdf.",
-        });
-      }
-
-      if (id) {
-        const updateData = {
-          title,
-          description,
-          status: status || "draft",
-          scheduledAt,
-          exclude: audience,
-          ...(picture && { picture }),
-          ...(pdf && { pdf }),
-          deepDives,
-        };
-        const doc = await Newsletter.findByIdAndUpdate(id, updateData, {
-          new: true,
-        });
-        if (!doc) return res.status(404).json({ error: "Not found" });
-        return res
-          .status(201)
-          .json({ message: "Newsletter updated", newsletter: doc });
-      }
-
-      const doc = await Newsletter.create({
-        title,
-        description,
-        picture,
-        pdf,
-        deepDives,
-        status: status || "draft",
-        scheduledAt,
-        author: req.user._id,
-      });
-
-      res.status(201).json({ message: "Newsletter created", newsletter: doc });
-    } catch (err) {
-      console.error("Error creating newsletter:", err);
-      res.status(500).json({ error: "Internal server error" });
+    if (!title || !description) {
+      return res.status(400).json({ error: "Missing title/description" });
     }
-  }
-);
 
+    // Validate deep dives (each must include required fields)
+    const allValid = deepDives.every(
+      (dd) => dd.title && dd.description && dd.picture && dd.pdf
+    );
+    if (!allValid) {
+      return res.status(400).json({
+        error:
+          "Each deep dive must include title, description, picture, and pdf.",
+      });
+    }
+
+    const newsletterData = {
+      title,
+      description,
+      picture: picture || null,
+      pdf: pdf || null,
+      deepDives,
+      status: status || "draft",
+      scheduledAt,
+      exclude: audience,
+    };
+
+    if (id) {
+      // Update existing newsletter
+      const doc = await Newsletter.findByIdAndUpdate(id, newsletterData, {
+        new: true,
+      });
+      if (!doc) return res.status(404).json({ error: "Not found" });
+      return res
+        .status(201)
+        .json({ message: "Newsletter updated", newsletter: doc });
+    }
+
+    // Create new newsletter
+    const doc = await Newsletter.create({
+      ...newsletterData,
+      author: req.user._id,
+    });
+
+    res.status(201).json({ message: "Newsletter created", newsletter: doc });
+  } catch (err) {
+    console.error("Error creating newsletter:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 
 router.patch("/newsletters/:id", async (req, res) => {
   const doc = await Newsletter.findByIdAndUpdate(req.params.id, req.body, {
