@@ -519,11 +519,22 @@ router.delete("/users/:id", async (req, res) => {
  * NEWSLETTERS (Admin creates/edits; statuses: draft/scheduled/published)
  * per spec: only admins post; users can read/comment/like/save. :contentReference[oaicite:23]{index=23}
  */
-router.get("/newsletters", async (_req, res) => {
-  const list = await Newsletter.find()
-    .populate("author", "firstName lastName username role userId")
-    .sort({ createdAt: -1 });
-  res.json(list);
+router.get("/newsletters", requireAuth, async (req, res) => {
+  try {
+    let query = {};
+    if (req.user.role !== "admin") {
+      query = { includedUsers: req.user.username };
+    }
+
+    const list = await Newsletter.find(query)
+      .populate("author", "firstName lastName username role userId")
+      .sort({ createdAt: -1 });
+
+    res.json(list);
+  } catch (err) {
+    console.error("Error fetching newsletters:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 router.get("/newsletters/analytics", async (_req, res) => {
@@ -623,7 +634,7 @@ router.post("/newsletters", async (req, res) => {
       deepDives,
       status: status || "draft",
       scheduledAt,
-      exclude: audience,
+      includedUsers: audience,
     };
 
     if (id) {
