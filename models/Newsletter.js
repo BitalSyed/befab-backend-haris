@@ -28,9 +28,9 @@ const DeepDiveSchema = new mongoose.Schema(
   { _id: false }
 );
 
-// Validator to ensure no more than 3 deep dives
+// Validator to ensure no more than 4 deep dives
 function deepDiveArrayLimit(val) {
-  return !Array.isArray(val) || val.length <= 3;
+  return !Array.isArray(val) || val.length <= 4;
 }
 
 const NewsletterSchema = new mongoose.Schema(
@@ -43,7 +43,7 @@ const NewsletterSchema = new mongoose.Schema(
       type: [DeepDiveSchema],
       validate: [deepDiveArrayLimit, "Deep dives cannot exceed 3 items"],
     },
-    exclude: [{ type: String }],
+    includedUsers: [{ type: String }],
     author: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
